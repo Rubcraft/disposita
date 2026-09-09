@@ -1,0 +1,34 @@
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.2
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+
+Layout/LineLength:
+  Max: 110
+
+Metrics/MethodLength:
+  Max: 20
+
+# The setting DSL exposes nine explicit options rather than an opaque options hash.
+Metrics/ParameterLists:
+  Max: 9
+
+RSpec/MultipleExpectations:
+  Max: 4
+
+# Match the existing project convention without rewriting every literal.
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+# Contract examples include setup and failure assertions in the same example.
+RSpec/ExampleLength:
+  Max: 12
+
+# Schema owns declaration metadata, resolution and validation as one cohesive API.
+Metrics/ClassLength:
+  Max: 150

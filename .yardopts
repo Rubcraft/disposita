@@ -1,0 +1,8 @@
+--markup markdown
+--readme README.md
+--title "Disposita Documentation"
+--protected
+lib/**/*.rb
+-
+README.md
+CHANGELOG.md

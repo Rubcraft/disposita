@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Verify tag matches gem version
+        shell: bash
+        run: |
+          version="$(ruby -Ilib -rdisposita/version -e 'print Disposita::VERSION')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+
+      - name: Build gem
+        run: gem build disposita.gemspec
+
+      - name: Configure RubyGems credentials
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
+
+      - name: Publish to RubyGems
+        run: gem push "disposita-$(ruby -Ilib -rdisposita/version -e 'print Disposita::VERSION').gem"
