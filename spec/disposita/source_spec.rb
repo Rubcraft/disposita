@@ -11,7 +11,7 @@ RSpec.describe Disposita::Source do
 
   it "defaults to read-only without secret persistence" do
     expect(source).not_to be_writable
-    expect(source).not_to be_allows_secrets
+    expect(source).not_to be_allows_secret_persistence
   end
 
   it "requires adapters to implement reading" do

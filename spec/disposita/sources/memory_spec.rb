@@ -2,7 +2,7 @@
 
 # Contracts for normalized in-memory source data and provenance.
 
-RSpec.describe Disposita::Sources::Hash do
+RSpec.describe Disposita::Sources::Memory do
   it "normalizes nested keys, including mappings inside arrays" do
     source = described_class.new({ "items" => [{ "name" => "first" }] }, name: :runtime)
     expect(source.read(nil)).to eq(items: [{ name: "first" }])

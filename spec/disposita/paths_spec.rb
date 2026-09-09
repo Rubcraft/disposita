@@ -63,4 +63,14 @@ RSpec.describe Disposita::Paths do
     expect(described_class.project("/tmp/app", ".")).to eq("/tmp/app")
     expect(described_class.project("/tmp/app", "config.yml")).to eq("/tmp/app/config.yml")
   end
+
+  %w[.. . ../outside nested/app C:escape nested\\app].each do |name|
+    it "rejects user configuration traversal or path components: #{name}" do
+      expect { described_class.user_config(name) }.to raise_error(Disposita::PathError)
+    end
+  end
+
+  it "accepts a filesystem root as the project boundary" do
+    expect(described_class.project("/", "app/config.yml")).to eq("/app/config.yml")
+  end
 end

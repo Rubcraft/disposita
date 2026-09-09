@@ -8,13 +8,13 @@
 
 RSpec.describe Disposita::Configuration do
   subject(:config) do
-    schema.resolve([
-                     Disposita::Sources::Hash.new({ auth: { token: "secret" } }, name: :project)
+    schema.resolve(sources: [
+                     Disposita::Sources::Memory.new({ auth: { token: "secret" } }, name: :project)
                    ])
   end
 
   let(:schema) do
-    Disposita.define(:app) do
+    Disposita.define_schema(:app) do
       namespace :auth do
         setting :token, type: String, secret: true
         setting :timeout, type: Integer, default: 30

@@ -8,7 +8,7 @@
 
 RSpec.describe Disposita::Schema do
   subject(:schema) do
-    Disposita.define(:scm, version: 2) do
+    Disposita.define_schema(:scm, version: 2) do
       namespace :git do
         setting :remote, type: String, default: "origin"
         setting :port, type: Integer, required: true
@@ -34,28 +34,28 @@ RSpec.describe Disposita::Schema do
 
     it "rejects duplicate settings" do
       expect do
-        Disposita.define(:bad) do
+        Disposita.define_schema(:bad) do
           setting :name, type: String
           setting :name, type: String
         end
       end.to raise_error(Disposita::SchemaError, /duplicate setting/)
     end
 
-    it "rejects contradictory required/default definitions" do
-      expect do
-        Disposita.define(:bad) do
-          setting :name, type: String, required: true, default: "x"
-        end
-      end.to raise_error(Disposita::SchemaError, /required settings cannot declare a default/)
+    it "allows defaults to satisfy required settings" do
+      required = Disposita.define_schema(:app) do
+        setting :name, type: String, required: true, default: "x"
+      end
+      expect(required.resolve.name).to eq("x")
+      expect(required.resolve.source_of(:name)).to eq(:default)
     end
   end
 
   describe "resolution" do
     it "merges defaults and ordered layers" do
-      global = Disposita::Sources::Hash.new({ git: { port: "22", transport: "https" } }, name: :global)
-      project = Disposita::Sources::Hash.new({ git: { port: "2222" } }, name: :project)
+      global = Disposita::Sources::Memory.new({ git: { port: "22", transport: "https" } }, name: :global)
+      project = Disposita::Sources::Memory.new({ git: { port: "2222" } }, name: :project)
 
-      config = schema.resolve([global, project])
+      config = schema.resolve(sources: [project, global])
 
       expect(config.git.to_h).to include(remote: "origin", transport: :https, port: 2222)
       expect(config.source_of("git.transport")).to eq(:global)
@@ -63,49 +63,46 @@ RSpec.describe Disposita::Schema do
     end
 
     it "replaces arrays rather than concatenating them" do
-      array_schema = Disposita.define(:array) do
+      array_schema = Disposita.define_schema(:array) do
         setting :items, type: Disposita::Types.array(String), default: %w[a b]
       end
 
-      config = array_schema.resolve([Disposita::Sources::Hash.new({ items: ["c"] })])
+      config = array_schema.resolve(sources: [Disposita::Sources::Memory.new({ items: ["c"] })])
 
       expect(config.items).to eq(["c"])
     end
 
     it "raises when a required setting remains absent" do
-      expect { schema.resolve([]) }.to raise_error(Disposita::MissingSettingError, /git.port/)
+      expect { schema.resolve }.to raise_error(Disposita::MissingSettingError, /git.port/)
     end
 
     it "rejects unknown settings" do
-      source = Disposita::Sources::Hash.new({ git: { porrt: 22, port: 22 } })
+      source = Disposita::Sources::Memory.new({ git: { porrt: 22, port: 22 } })
 
-      expect { schema.resolve([source]) }.to raise_error(Disposita::UnknownSettingError, /git.porrt/)
+      expect { schema.resolve(sources: [source]) }.to raise_error(Disposita::UnknownSettingError, /git.porrt/)
     end
 
     it "rejects values that fail custom validation" do
-      source = Disposita::Sources::Hash.new({ git: { port: 22, retries: -1 } })
+      source = Disposita::Sources::Memory.new({ git: { port: 22, retries: -1 } })
 
-      expect { schema.resolve([source]) }.to raise_error(Disposita::ValidationError, /git.retries/)
+      expect { schema.resolve(sources: [source]) }.to raise_error(Disposita::ValidationError, /git.retries/)
     end
 
     it "rejects a newer persisted schema version" do
-      source = Disposita::Sources::Hash.new({ version: 99, git: { port: 22 } })
+      source = Disposita::Sources::Memory.new({ version: 99, git: { port: 22 } })
 
-      expect { schema.resolve([source]) }.to raise_error(Disposita::VersionError)
+      expect { schema.resolve(sources: [source]) }.to raise_error(Disposita::VersionError)
     end
   end
 
   describe "environment and runtime precedence" do
     it "places environment above supplied sources and runtime above environment" do
-      global = Disposita::Sources::Hash.new({ git: { port: 22, transport: :ssh } }, name: :global)
+      global = Disposita::Sources::Memory.new({ git: { port: 22, transport: :ssh } }, name: :global)
       env = { "SCM_GIT_PORT" => "2222", "SCM_GIT_TRANSPORT" => "https" }
 
-      config = schema.load(
-        sources: [global],
-        env: env,
-        env_prefix: "SCM",
-        overrides: { git: { port: 2022 } }
-      )
+      environment = Disposita::Sources::Environment.new(env: env, prefix: "SCM")
+      runtime = Disposita::Sources::Memory.new({ git: { port: 2022 } }, name: :runtime)
+      config = schema.resolve(sources: [runtime, environment, global])
 
       expect(config.git.port).to eq(2022)
       expect(config.git.transport).to eq(:https)
@@ -133,7 +130,7 @@ RSpec.describe Disposita::Schema do
 
   describe "safe introspection" do
     let(:private_schema) do
-      Disposita.define(:app) do
+      Disposita.define_schema(:app) do
         setting :token, type: String, secret: true, default: "test-secret"
         setting :optional_token, type: String, secret: true
         setting :host, type: String, default: "localhost"
@@ -145,7 +142,7 @@ RSpec.describe Disposita::Schema do
                                                          secret: true)
       expect(private_schema.describe(:optional_token)).to include(default: nil, has_default: false)
       expect(private_schema.describe(:host)).to include(default: "localhost")
-      expect(private_schema.load.token).to eq("test-secret")
+      expect(private_schema.resolve.token).to eq("test-secret")
     end
 
     it "accepts frozen paths without modifying caller input" do
@@ -161,23 +158,24 @@ RSpec.describe Disposita::Schema do
 
   describe "invalid input" do
     it "rejects malformed persisted versions" do
-      source = Disposita::Sources::Hash.new({ version: "invalid" })
-      expect { schema.resolve([source]) }.to raise_error(Disposita::VersionError, /integer/)
+      source = Disposita::Sources::Memory.new({ version: "invalid" })
+      expect { schema.resolve(sources: [source]) }.to raise_error(Disposita::VersionError, /integer/)
     end
 
     it "rejects uncoercible values with the setting path" do
-      source = Disposita::Sources::Hash.new({ git: { port: "invalid" } })
-      expect { schema.resolve([source]) }.to raise_error(Disposita::CoercionError, /git.port/)
+      source = Disposita::Sources::Memory.new({ git: { port: "invalid" } })
+      expect { schema.resolve(sources: [source]) }.to raise_error(Disposita::CoercionError, /git.port/)
     end
 
     it "rejects writes to read-only sources" do
-      source = Disposita::Sources::Hash.new({})
+      source = Disposita::Sources::Memory.new({})
       expect { schema.write(source, git: { port: 22 }) }.to raise_error(Disposita::SaveError, /read-only/)
     end
 
     it "honors disabled coercion" do
-      strict = Disposita.define(:app) { setting :port, type: Integer, coerce: false }
-      expect { strict.load(overrides: { port: "22" }) }.to raise_error(Disposita::ValidationError)
+      strict = Disposita.define_schema(:app) { setting :port, type: Integer, coerce: false }
+      source = Disposita::Sources::Memory.new({ port: "22" })
+      expect { strict.resolve(sources: [source]) }.to raise_error(Disposita::ValidationError)
     end
   end
 end

@@ -10,7 +10,7 @@ require_relative "disposita/internal/hash_tools"
 require_relative "disposita/types"
 require_relative "disposita/source"
 require_relative "disposita/formats/yaml"
-require_relative "disposita/sources/hash"
+require_relative "disposita/sources/memory"
 require_relative "disposita/sources/environment"
 require_relative "disposita/sources/file"
 require_relative "disposita/paths"
@@ -26,23 +26,25 @@ require_relative "disposita/schema"
 # which sources participate when configuration is resolved.
 #
 # @example Define and resolve a small schema
-#   AppConfig = Disposita.define(:app, version: 1) do
+#   AppSchema = Disposita.define_schema(:app, version: 1) do
 #     namespace :server do
 #       setting :host, type: String, default: "localhost"
 #       setting :port, type: Integer, default: 3000
 #     end
 #   end
 #
-#   config = AppConfig.resolve([])
+#   config = AppSchema.resolve
 #   config.server.host # => "localhost"
 #   config.server.port # => 3000
 #
-# @example Combine a file layer with environment overrides
-#   schema.load(
-#     sources: [Disposita::Sources::File.new(".app.yml", name: :project)],
-#     env: ENV,
-#     env_prefix: "APP"
-#   )
+# @example Combine explicit environment and memory sources
+#   schema = Disposita.define_schema(:app) do
+#     setting :port, type: Integer, default: 3000
+#   end
+#   config = schema.resolve(sources: [
+#     Disposita::Sources::Environment.new(prefix: "APP"),
+#     Disposita::Sources::Memory.new({ port: 4000 }, name: :project)
+#   ])
 #
 # @see Disposita::Schema
 # @see Disposita::Configuration
@@ -55,6 +57,10 @@ module Disposita
   # The block is evaluated by Disposita's schema DSL. A schema is only a
   # description until the caller explicitly resolves it against one or more
   # sources, so this method is safe to use while loading a gem or application.
+  # Setting and namespace names must be non-empty String or Symbol path
+  # segments without dots. Defaults are copied and deeply frozen at declaration
+  # time, so later mutations of the caller's arrays, hashes or strings cannot
+  # change the schema.
   #
   # @param name [String, Symbol] stable logical name of the consumer-owned
   #   configuration domain.
@@ -67,7 +73,7 @@ module Disposita
   #   an invalid schema definition.
   #
   # @example
-  #   SCMConfig = Disposita.define(:scm, version: 1) do
+  #   SCMSchema = Disposita.define_schema(:scm, version: 1) do
   #     namespace :git do
   #       setting :remote, type: String, default: "origin"
   #       setting :transport,
@@ -75,7 +81,7 @@ module Disposita
   #               default: :ssh
   #     end
   #   end
-  def define(name, version: 1, &block)
+  def define_schema(name, version: 1, &block)
     raise SchemaError, "a schema block is required" unless block
 
     builder = Internal::SchemaBuilder.new

@@ -5,7 +5,7 @@ require "tempfile"
 
 module Disposita
   # Built-in layers for files, environment variables and in-memory values.
-  # Pass sources to Schema#resolve in increasing order of precedence.
+  # Pass sources to Schema#resolve in highest-to-lowest order of precedence.
   module Sources
     # File-backed configuration source with atomic persistence.
     #
@@ -24,8 +24,11 @@ module Disposita
     # written configuration.
     #
     # @example Read and write a project file
+    #   schema = Disposita.define_schema(:app) do
+    #     namespace(:server) { setting :port, type: Integer, default: 3000 }
+    #   end
     #   source = Disposita::Sources::File.new(".app.yml", name: :project)
-    #   config = schema.resolve([source])
+    #   config = schema.resolve(sources: [source])
     #   schema.write(source, server: { port: 9292 })
     class File < Source
       # @return [String] expanded backing file path.
@@ -62,7 +65,7 @@ module Disposita
       def writable? = true
 
       # @return [Boolean] whether secret settings were explicitly allowed.
-      def allows_secrets? = @allow_secrets
+      def allows_secret_persistence? = @allow_secrets
 
       # Atomically persists validated configuration data.
       #
@@ -76,7 +79,7 @@ module Disposita
       #   present and +allow_secrets+ is false.
       # @raise [Disposita::SaveError] when filesystem persistence fails.
       def write(schema, data)
-        reject_secrets!(schema, data) unless allows_secrets?
+        reject_secrets!(schema, data) unless allows_secret_persistence?
         replace_file(@format.dump(data))
         path
       rescue UnsafeSecretPersistenceError
@@ -94,17 +97,19 @@ module Disposita
           temporary.write(content)
           temporary.flush
           temporary.fsync
-          ::File.chmod(0o600, temporary.path) if allows_secrets?
+          ::File.chmod(0o600, temporary.path) if allows_secret_persistence?
           ::File.rename(temporary.path, path)
         end
       end
 
       def reject_secrets!(schema, data)
-        schema.settings.select(&:secret?).each do |setting|
-          next if Internal::HashTools.get(data, setting.path).equal?(Internal::UNDEFINED)
+        schema.each_setting.select { |item| item[:secret] }.each do |setting|
+          if Internal::HashTools.get(data, setting[:path].split(".").map(&:to_sym)).equal?(Internal::UNDEFINED)
+            next
+          end
 
           raise UnsafeSecretPersistenceError,
-                "refusing to persist secret setting #{setting.key.inspect} to #{path}"
+                "refusing to persist secret setting #{setting[:path].inspect} to #{path}"
         end
       end
     end

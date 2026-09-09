@@ -1,7 +1,9 @@
 --markup markdown
 --readme README.md
 --title "Disposita Documentation"
---protected
+--no-private
+--hide-api private
+--template-path .yard/templates
 lib/**/*.rb
 -
 README.md
