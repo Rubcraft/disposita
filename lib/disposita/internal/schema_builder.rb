@@ -5,7 +5,7 @@ module Disposita
     # Evaluates the schema declaration DSL and records setting definitions.
     #
     # The builder is intentionally private. Public callers keep the immutable
-    # {Disposita::Schema} returned by +Disposita.define+ rather than retaining
+    # {Disposita::Schema} returned by +Disposita.define_schema+ rather than retaining
     # mutable DSL state.
     #
     # @api private
@@ -23,7 +23,7 @@ module Disposita
 
       # Declares a nested namespace and evaluates its block in a child builder.
       #
-      # @param name [String, Symbol] namespace segment.
+      # @param name [String, Symbol] non-empty namespace segment without dots.
       # @yield nested schema DSL.
       # @return [Object] result of evaluating the namespace block.
       # @raise [SchemaError] when the name is invalid.
@@ -39,10 +39,11 @@ module Disposita
       # make intent explicit and to detect contradictory declarations; absence is
       # otherwise optional unless +required: true+ is used.
       #
-      # @param name [String, Symbol] leaf setting name.
+      # @param name [String, Symbol] non-empty setting segment without dots.
       # @param type [Object] Ruby class or type-like object understood by
       #   TypeAdapter.
-      # @param default [Object] default value, or UNDEFINED when absent.
+      # @param default [Object] default value, copied and deeply frozen when
+      #   declared; UNDEFINED when absent.
       # @param required [Boolean] whether resolution must produce the setting.
       # @param optional [Boolean] explicit optional marker.
       # @param env [String, nil] explicit environment variable name.
@@ -55,14 +56,14 @@ module Disposita
       def setting(name, type:, default: UNDEFINED, required: false, optional: false,
                   env: nil, secret: false, description: nil, coerce: true, &validator)
         validate_name!(name)
-        validate_presence!(required, optional, default)
+        validate_presence!(required, optional)
         path = @prefix + [name.to_sym]
         reject_duplicate!(path)
 
         settings << SettingDefinition.new(
           path: path.freeze,
           type: type,
-          default: default,
+          default: immutable_default(default),
           required: required,
           env: env,
           secret: secret,
@@ -74,11 +75,14 @@ module Disposita
 
       private
 
-      def validate_presence!(required, optional, default)
-        raise SchemaError, "required and optional cannot both be true" if required && optional
-        return unless required && !default.equal?(UNDEFINED)
+      def immutable_default(value)
+        return UNDEFINED if value.equal?(UNDEFINED)
 
-        raise SchemaError, "required settings cannot declare a default"
+        HashTools.deep_freeze(HashTools.deep_dup(value))
+      end
+
+      def validate_presence!(required, optional)
+        raise SchemaError, "required and optional cannot both be true" if required && optional
       end
 
       def reject_duplicate!(path)
@@ -88,9 +92,10 @@ module Disposita
       end
 
       def validate_name!(name)
-        return if name.is_a?(String) || name.is_a?(Symbol)
+        raise SchemaError, "names must be String or Symbol" unless name.is_a?(String) || name.is_a?(Symbol)
+        return unless name.to_s.empty? || name.to_s.include?(".")
 
-        raise SchemaError, "names must be String or Symbol"
+        raise SchemaError, "names must be non-empty path segments without dots"
       end
     end
   end

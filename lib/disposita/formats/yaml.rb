@@ -14,6 +14,11 @@ module Disposita
     # runtime configuration are serialized as plain strings and restored later
     # by schema coercion when the declared type requires it.
     #
+    # Quote values that YAML would otherwise interpret as special types when
+    # they should be Strings. For example, +release_date: 2026-09-09+ is parsed
+    # as a Date and rejected before schema coercion, even with +type: String+.
+    # Write +release_date: "2026-09-09"+ instead. Date remains disallowed.
+    #
     # Consumers normally interact with this module indirectly through
     # {Disposita::Sources::File}.
     module YAML
@@ -46,6 +51,7 @@ module Disposita
         Psych.safe_dump(stringify(data), permitted_classes: [], permitted_symbols: [], aliases: false)
       end
 
+      # @api private
       # Converts Ruby-oriented data to serialization-safe primitives.
       #
       # @param value [Object] nested configuration value.
@@ -62,6 +68,7 @@ module Disposita
           value
         end
       end
+      private_class_method :stringify
     end
   end
 end

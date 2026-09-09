@@ -20,10 +20,13 @@ module Disposita
   #     end
   #   end
   #
+  #   schema = Disposita.define_schema(:app) do
+  #     namespace(:feature) { setting :enabled, type: Disposita::Types.boolean }
+  #   end
   #   source = DatabaseSource.new(name: :database)
-  #   config = schema.resolve([source])
+  #   config = schema.resolve(sources: [source])
   #
-  # @see Disposita::Sources::Hash
+  # @see Disposita::Sources::Memory
   # @see Disposita::Sources::Environment
   # @see Disposita::Sources::File
   class Source
@@ -42,7 +45,8 @@ module Disposita
     # Array and Hash values. Schema coercion and validation happen later.
     #
     # @param _schema [Disposita::Schema] schema being resolved; custom sources
-    #   may use it for introspection.
+    #   may use {Disposita::Schema#each_setting} and {Disposita::Schema#describe}
+    #   for immutable metadata without depending on internal classes.
     # @return [Hash] partial configuration data.
     # @raise [NotImplementedError] in the base implementation.
     def read(_schema)
@@ -54,13 +58,14 @@ module Disposita
     # @return [Boolean] +false+ by default.
     def writable? = false
 
-    # Indicates whether this source permits settings marked +secret: true+.
+    # Indicates whether this source permits persisting settings marked +secret: true+.
+    # This does not restrict reading secrets from any source.
     #
     # Sources should default to the safer behavior and opt in only when their
     # storage characteristics are appropriate for secret material.
     #
     # @return [Boolean] +false+ by default.
-    def allows_secrets? = false
+    def allows_secret_persistence? = false
 
     # Persists explicit validated data to this source.
     #

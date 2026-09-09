@@ -9,11 +9,11 @@ module Disposita
     # values supplied programmatically at the highest-precedence layer.
     #
     # @example
-    #   source = Disposita::Sources::Hash.new(
+    #   source = Disposita::Sources::Memory.new(
     #     { server: { port: 9292 } },
     #     name: :runtime
     #   )
-    class Hash < Source
+    class Memory < Source
       # @param data [Hash] partial configuration layer.
       # @param name [String, Symbol] provenance name.
       def initialize(data, name: :memory)

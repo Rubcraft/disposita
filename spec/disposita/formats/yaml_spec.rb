@@ -38,4 +38,12 @@ RSpec.describe Disposita::Formats::YAML do
   it "serializes array members as portable primitives" do
     expect(described_class.load(described_class.dump(items: [:ssh, 2]))).to eq("items" => ["ssh", 2])
   end
+
+  it "rejects Ruby Symbol tags" do
+    expect { described_class.load("transport: !ruby/symbol ssh") }.to raise_error(Disposita::ParseError)
+  end
+
+  it "rejects implicit arbitrary classes such as Date" do
+    expect { described_class.load("date: 2026-09-09") }.to raise_error(Disposita::ParseError)
+  end
 end

@@ -9,21 +9,20 @@ module Disposita
   # that value means to the application.
   #
   # Schemas are immutable after construction. Resolution is explicit and
-  # ordered: later sources override earlier sources, while schema defaults form
-  # the lowest-precedence layer. Environment and runtime overrides may be added
-  # conveniently through {#load}.
+  # ordered: sources are listed from highest to lowest precedence. Defaults are
+  # the final fallback. Environment and runtime values are explicit sources.
   #
   # @example Resolve ordered layers
-  #   schema = Disposita.define(:app) do
+  #   schema = Disposita.define_schema(:app) do
   #     setting :port, type: Integer, default: 3000
   #   end
   #
-  #   global  = Disposita::Sources::Hash.new({ port: 4000 }, name: :global)
-  #   project = Disposita::Sources::Hash.new({ port: 5000 }, name: :project)
+  #   global  = Disposita::Sources::Memory.new({ port: 4000 }, name: :global)
+  #   project = Disposita::Sources::Memory.new({ port: 5000 }, name: :project)
   #
-  #   schema.resolve([global, project]).port # => 5000
+  #   schema.resolve(sources: [project, global]).port # => 5000
   #
-  # @see Disposita.define
+  # @see Disposita.define_schema
   # @see Disposita::Configuration
   class Schema
     # @return [Symbol] logical name of the configuration domain.
@@ -32,12 +31,15 @@ module Disposita
     # @return [Integer] consumer-owned persisted schema version.
     attr_reader :version
 
+    # @api private
     # @return [Array<Disposita::Internal::SettingDefinition>] declared settings.
     attr_reader :settings
+    private :settings
 
     # Builds a schema from already validated definitions.
+    # @api private
     #
-    # Consumers normally create schemas with {Disposita.define}; this
+    # Consumers normally create schemas with {Disposita.define_schema}; this
     # initializer is public primarily to keep Schema as a normal Ruby object.
     #
     # @param name [String, Symbol] logical domain name.
@@ -55,18 +57,18 @@ module Disposita
       freeze
     end
 
-    # Finds a setting definition by dotted, array or scalar path.
+    # Enumerates immutable public metadata in declaration order.
     #
-    # This is the lowest-level introspection method. Most user-facing tooling
-    # should prefer {#describe}, which returns a stable metadata Hash instead of
-    # exposing the internal definition object.
-    #
-    # @param path [String, Array<String, Symbol>, Symbol] setting path,
-    #   for example +"git.transport"+ or +[:git, :transport]+.
-    # @return [Disposita::Internal::SettingDefinition, nil] definition when the
-    #   path exists, otherwise +nil+.
-    def setting(path)
-      @settings_by_path[normalize_path(path)]
+    # Custom Sources can use :path (dotted String) and :env without accessing
+    # internal definitions. All fields match {#describe}; secrets are redacted.
+    # @yieldparam metadata [Hash] deeply frozen metadata for one setting.
+    # @return [Enumerator<Hash>, Disposita::Schema] an Enumerator without a
+    #   block, otherwise this schema.
+    def each_setting
+      return enum_for(__method__) unless block_given?
+
+      settings.each { |item| yield describe(item.path) }
+      self
     end
 
     # Returns user-oriented metadata for one declared setting.
@@ -79,22 +81,15 @@ module Disposita
     # @param path [String, Array<String, Symbol>, Symbol] setting path.
     # @return [Hash, nil] frozen metadata Hash, or +nil+ for an unknown path.
     # @example
-    #   schema.describe("git.transport")
-    #   # => {
-    #   #      path: "git.transport",
-    #   #      type: "enum(:ssh, :https)",
-    #   #      default: :ssh,
-    #   #      has_default: true,
-    #   #      required: false,
-    #   #      secret: false,
-    #   #      env: nil,
-    #   #      description: "Preferred Git transport"
-    #   #    }
+    #   schema = Disposita.define_schema(:app) do
+    #     setting :port, type: Integer, default: 3000
+    #   end
+    #   schema.describe(:port)[:default] # => 3000
     def describe(path)
-      item = setting(path)
+      item = @settings_by_path[normalize_path(path)]
       return unless item
 
-      {
+      metadata = {
         path: item.key,
         type: Internal::TypeAdapter.describe(item.type),
         default: if item.default?
@@ -105,71 +100,33 @@ module Disposita
         secret: item.secret?,
         env: item.env,
         description: item.description
-      }.freeze
+      }
+      Internal::HashTools.deep_freeze(Internal::HashTools.deep_dup(metadata))
     end
 
-    # Resolves configuration using convenient optional ENV and runtime layers.
+    # Resolves explicit sources listed from highest to lowest precedence.
     #
-    # Sources supplied in +sources+ are applied in order. If +env+ is provided,
-    # an Environment source is appended after them. If +overrides+ is provided,
-    # an in-memory runtime source is appended last, giving runtime values the
-    # highest precedence.
-    #
-    # No global ENV lookup happens unless +env+ is explicitly provided. Passing
-    # +ENV+ is therefore an application decision rather than a side effect of
-    # loading Disposita.
-    #
-    # @param sources [Array<Disposita::Source>] ordered low-to-high precedence
-    #   configuration sources.
-    # @param env [Hash, nil] environment-like Hash. When present, declared +env+
-    #   names or +env_prefix+ derived names are read from it.
-    # @param env_prefix [String, nil] prefix used to derive names such as
-    #   +APP_SERVER_PORT+ from the setting path +server.port+.
-    # @param overrides [Hash, nil] highest-precedence runtime values. These are
-    #   never persisted automatically.
-    # @return [Disposita::Configuration] immutable typed configuration.
-    # @raise [Disposita::ValidationError] if a value cannot be validated.
-    # @raise [Disposita::UnknownSettingError] if a source contains undeclared
-    #   settings.
-    # @raise [Disposita::VersionError] if persisted data declares a newer schema
-    #   version than this runtime understands.
-    # @example
-    #   config = schema.load(
-    #     sources: [project_source],
-    #     env: ENV,
-    #     env_prefix: "MY_APP",
-    #     overrides: { server: { port: 9292 } }
-    #   )
-    def load(sources: [], env: nil, env_prefix: nil, overrides: nil)
-      effective_sources = Array(sources).dup
-      effective_sources << Sources::Environment.new(env: env, prefix: env_prefix) if env
-      effective_sources << Sources::Hash.new(overrides, name: :runtime) if overrides
-      resolve(effective_sources)
-    end
+    # For each setting, the first source providing a value wins. Nested hashes
+    # merge recursively; arrays and scalars are selected whole. Defaults are
+    # always the final fallback. No sources means no ENV or file reads.
+    # A setting declared +required: true+ must have a value in the final
+    # Configuration; the consumer need not supply it explicitly. A declared
+    # default satisfies that requirement, so +required: true, default: 30+ is
+    # valid. Combining +required: true+ with +optional: true+ is invalid.
+    # Coercion and validation run after merging. Every supplied source is checked
+    # for unknown settings and unsupported schema versions, even when shadowed.
+    # @param sources [Array<Disposita::Source>] sources from highest to lowest precedence.
+    # @return [Disposita::Configuration] immutable typed values with provenance.
+    # @raise [Disposita::MissingSettingError] when a required value is absent.
+    # @raise [Disposita::CoercionError] when the selected value cannot be coerced.
+    # @raise [Disposita::ValidationError] when validation fails.
+    # @raise [Disposita::UnknownSettingError] when a source has undeclared keys.
+    # @raise [Disposita::VersionError] when persisted versions are invalid or newer.
+    def resolve(sources: [])
+      data = {}
+      provenance = {}
 
-    # Resolves an explicit ordered list of sources.
-    #
-    # Defaults are applied first. Each source then contributes a partial layer;
-    # hashes are deep-merged, while arrays and scalar values replace lower
-    # precedence values. The final representation is coerced and validated only
-    # after all layers have been combined.
-    #
-    # @param sources [Array<Disposita::Source>, Disposita::Source] source or
-    #   ordered sources from lowest to highest precedence.
-    # @return [Disposita::Configuration] immutable resolved configuration with
-    #   provenance information for each selected value.
-    # @raise [Disposita::MissingSettingError] when a required setting remains
-    #   absent after all layers are resolved.
-    # @raise [Disposita::CoercionError] when a value cannot be coerced to its
-    #   declared type.
-    # @raise [Disposita::UnknownSettingError] when input contains an undeclared
-    #   setting.
-    # @raise [Disposita::VersionError] when a source is newer than the schema.
-    def resolve(sources)
-      data = defaults
-      provenance = default_provenance
-
-      Array(sources).each do |source|
+      sources.each do |source|
         raw = source.read(self)
         validate_version!(raw)
         normalized = normalize_layer(raw)
@@ -178,6 +135,8 @@ module Disposita
         mark_provenance!(provenance, normalized, source.name)
       end
 
+      data = Internal::DeepMerge.call(data, defaults)
+      provenance = default_provenance.merge(provenance)
       resolved = coerce_and_validate(data)
       Configuration.new(schema: self, data: resolved, provenance: provenance)
     end
@@ -199,6 +158,9 @@ module Disposita
     # @raise [Disposita::UnsafeSecretPersistenceError] if the target source
     #   refuses secret values.
     # @example
+    #   schema = Disposita.define_schema(:app) do
+    #     namespace(:server) { setting :port, type: Integer }
+    #   end
     #   file = Disposita::Sources::File.new(".app.yml", name: :project)
     #   schema.write(file, server: { port: 9292 })
     def write(source, data)
@@ -254,17 +216,19 @@ module Disposita
       raise VersionError, "configuration version must be an integer"
     end
 
-    def reject_unknown!(data)
-      known = settings.map(&:path)
-      Internal::HashTools.flatten_keys(data).each do |path|
-        next if known.include?(path)
-
-        raise UnknownSettingError, "unknown setting: #{path.join('.')}"
+    def reject_unknown!(data, prefix = [])
+      data.each do |key, value|
+        path = prefix + [key]
+        if value.is_a?(Hash) && settings.any? { |item| item.path[0, path.size] == path }
+          reject_unknown!(value, path)
+        elsif !@settings_by_path.key?(path)
+          raise UnknownSettingError, "unknown setting: #{path.join('.')}"
+        end
       end
     end
 
     def mark_provenance!(provenance, layer, source_name)
-      Internal::HashTools.flatten_keys(layer).each { |path| provenance[path] = source_name }
+      Internal::HashTools.flatten_keys(layer).each { |path| provenance[path] ||= source_name }
     end
 
     def coerce_and_validate(data)
@@ -304,9 +268,10 @@ module Disposita
         raise ValidationError, "validation failed for #{setting.key}"
       end
 
-      resolved
+      Internal::HashTools.deep_dup(resolved)
     rescue CoercionError => e
-      raise CoercionError, "#{setting.key}: #{e.message}"
+      detail = setting.secret? ? "[REDACTED] cannot coerce secret value" : e.message
+      raise CoercionError, "#{setting.key}: #{detail}", cause: setting.secret? ? nil : e
     end
   end
 end

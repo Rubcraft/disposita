@@ -14,6 +14,10 @@ module Disposita
   # diagnostic representations such as {#inspect} and {#explain}.
   #
   # @example
+  #   schema = Disposita.define_schema(:app) do
+  #     namespace(:server) { setting :port, type: Integer, default: 3000 }
+  #   end
+  #   config = schema.resolve
   #   config.server.port          # => 3000
   #   config[:server][:port]      # => 3000
   #   config.source_of("server.port") # => :default
@@ -25,6 +29,7 @@ module Disposita
     # Node deliberately wraps hashes instead of exposing them directly so the
     # resolved configuration remains immutable and secret-aware diagnostics can
     # be delegated back to the owning Configuration.
+    # @api private
     class Node
       # @param data [Hash] subtree represented by this node.
       # @param root [Disposita::Configuration] owning root configuration.
@@ -33,12 +38,13 @@ module Disposita
         @data = data
         @root = root
         @path = path
+        freeze
       end
 
       # Reads a child setting or namespace by key.
       #
       # @param key [String, Symbol] immediate child name.
-      # @return [Object, Disposita::Configuration::Node] scalar value or nested
+      # @return [Object] scalar value or nested
       #   read-only node.
       # @raise [KeyError] when the child is not present in the resolved data.
       def [](key)
@@ -69,12 +75,14 @@ module Disposita
       # @param arguments [Array<Object>] arguments supplied by the caller.
       # @return [Object] resolved setting or namespace.
       # @raise [NoMethodError] for unknown names or calls with arguments.
+      # @api private
       def method_missing(name, *arguments)
         return super unless arguments.empty? && @data.key?(name)
 
         value_for(name)
       end
 
+      # @api private
       def respond_to_missing?(name, include_private = false)
         @data.key?(name) || super
       end
@@ -94,9 +102,10 @@ module Disposita
     attr_reader :schema
 
     # Builds an immutable resolved configuration.
+    # @api private
     #
     # Applications normally receive instances from {Disposita::Schema#resolve}
-    # or {Disposita::Schema#load} rather than constructing them directly.
+    # rather than constructing them directly.
     #
     # @param schema [Disposita::Schema] owning schema.
     # @param data [Hash] fully coerced and validated values.
@@ -113,7 +122,7 @@ module Disposita
     # Reads a top-level setting or namespace.
     #
     # @param key [String, Symbol] top-level key.
-    # @return [Object, Disposita::Configuration::Node]
+    # @return [Object]
     # @raise [KeyError] when the key is absent.
     def [](key) = @root[key]
 
@@ -122,8 +131,6 @@ module Disposita
     # @param path [String, Array<String, Symbol>, Symbol] setting path.
     # @return [Symbol, nil] source name, +:default+ for schema defaults, or +nil+
     #   when no provenance entry exists.
-    # @example
-    #   config.source_of("git.transport") # => :project
     def source_of(path)
       @provenance[normalize_path(path)]
     end
@@ -139,12 +146,12 @@ module Disposita
     # @raise [KeyError] if the path is not declared by the schema.
     def explain(path)
       normalized = normalize_path(path)
-      setting = schema.setting(normalized)
+      setting = schema.describe(normalized)
       raise KeyError, "unknown configuration key: #{normalized.join('.')}" unless setting
 
       {
         path: normalized.join("."),
-        value: setting.secret? ? "[REDACTED]" : Internal::HashTools.get(@data, normalized),
+        value: setting[:secret] ? "[REDACTED]" : Internal::HashTools.deep_dup(@data.dig(*normalized)),
         source: @provenance[normalized]
       }.freeze
     end
@@ -170,12 +177,14 @@ module Disposita
     # @param arguments [Array<Object>] arguments supplied by the caller.
     # @return [Object] resolved setting or namespace.
     # @raise [NoMethodError] for unknown names or calls with arguments.
+    # @api private
     def method_missing(name, *arguments)
       return super unless arguments.empty? && @root.respond_to?(name)
 
       @root.public_send(name)
     end
 
+    # @api private
     def respond_to_missing?(name, include_private = false)
       @root.respond_to?(name) || super
     end
@@ -193,8 +202,8 @@ module Disposita
     def inspect_node(data, prefix)
       body = data.map do |key, value|
         path = prefix + [key]
-        setting = schema.setting(path)
-        rendered = if setting&.secret?
+        setting = schema.describe(path)
+        rendered = if setting && setting[:secret]
                      "[REDACTED]"
                    elsif value.is_a?(Hash)
                      inspect_node(value, path)

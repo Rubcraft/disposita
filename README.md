@@ -1,322 +1,276 @@
 # Disposita
 
-Declarative, typed and layered configuration infrastructure for Ruby applications, gems and CLIs.
-
-Disposita provides the mechanics of configuration while leaving ownership and meaning with the consumer. It does not know what `:ssh`, `production` or a timeout mean to your application; it only knows how those values are declared, loaded, coerced, validated, layered and persisted.
-
-## Why Disposita?
-
-Configuration tends to grow into repeated infrastructure: parsers, defaults, environment variables, per-user paths, project overrides, validation, persistence and diagnostics. Disposita centralizes that infrastructure without making a toolkit or framework the owner of every consumer's configuration.
-
-## Installation
-
-Add to your Gemfile:
-
-```ruby
-gem "disposita"
-```
-
-Then run `bundle install`.
+Declarative, typed configuration for Ruby applications and gems. Define the settings your application owns, choose explicit sources, and resolve an immutable configuration.
 
 ## Define a schema
 
 ```ruby
 require "disposita"
 
-SCMConfig = Disposita.define(:scm, version: 1) do
-  namespace :git do
-    setting :default_remote,
-      type: String,
-      default: "origin",
-      description: "Default Git remote"
-
-    setting :transport,
-      type: Disposita::Types.enum(:ssh, :https),
-      default: :ssh,
-      env: "SCM_GIT_TRANSPORT"
-
-    setting :timeout,
-      type: Integer,
-      default: 30
-
-    setting :token,
-      type: String,
-      secret: true,
-      optional: true
+AppSchema = Disposita.define_schema(:app, version: 1) do
+  namespace :server do
+    setting :host, type: String, default: "localhost"
+    setting :port, type: Integer, default: 3000
   end
 end
 ```
 
-`Disposita.define` returns a schema object. It does not register global mutable state and it performs no filesystem or environment reads by itself.
+`Disposita.define_schema` returns a `Disposita::Schema`. Requiring the gem and defining a schema do not read configuration files or ENV, create directories, or register global configuration state.
 
-### Setting options
-
-Within `Disposita.define`, `namespace(name) { ... }` groups settings; namespaces can nest.
-`setting(name, type:, ...) { |value| ... }` declares a leaf. Its optional validator runs after coercion and must return a truthy value.
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `type:` | Required | Ruby class, a built-in type helper, or an object implementing `valid?` and optionally `coerce`. Otherwise validation uses `===`. |
-| `default:` | Absent | Value used when no source provides one. An explicit `nil` still counts as a default and must satisfy the declared type. |
-| `required:` | `false` | Reject resolution if the setting is absent. Cannot be combined with a default or `optional: true`. |
-| `optional:` | `false` | Explicitly documents that absence is allowed; settings are already optional unless required. |
-| `env:` | `nil` | Explicit variable name, taking precedence over generated names. |
-| `secret:` | `false` | Redact diagnostics and deny ordinary file persistence. |
-| `description:` | `nil` | Consumer-facing text returned by schema introspection. |
-| `coerce:` | `true` | Convert raw input before checking semantic validation. Set false for strict values. |
-
-`Schema#load` accepts no arguments for defaults-only resolution. `Schema#resolve` requires an explicit source or array; use `resolve([])` for defaults alone.
-
-## Resolve layers
+## Resolve defaults
 
 ```ruby
-global = Disposita::Sources::File.new(
-  File.join(Disposita::Paths.user_config("scm"), "config.yml"),
-  name: :global
-)
+config = AppSchema.resolve
 
-project = Disposita::Sources::File.new(
-  ".scm.yml",
-  name: :project
-)
+config.server.host # => "localhost"
+config.server.port # => 3000
+```
 
-config = SCMConfig.load(
-  sources: [global, project],
-  env: ENV,
-  env_prefix: "SCM",
-  overrides: { git: { timeout: 10 } }
+No external source participates unless supplied explicitly. Declaring a setting's `env:` name does not enable ENV reads by itself.
+
+## Resolve multiple sources
+
+Building on `AppSchema` above:
+
+```ruby
+config = AppSchema.resolve(
+  sources: [
+    Disposita::Sources::Environment.new(prefix: "APP", name: :environment),
+    Disposita::Sources::File.new(".app.yml", name: :project)
+  ]
 )
 ```
 
-Precedence is explicit and follows source order. Schema defaults are always the lowest layer; runtime overrides supplied to `load` are the highest layer.
+Sources are ordered from highest to lowest precedence. For each setting, Disposita uses the first source that provides a value, falling back through the remaining sources and finally to the schema default.
+
+For example, with `APP_SERVER_PORT=5000` and this `.app.yml`:
+
+```yaml
+server:
+  host: example.com
+  port: 4000
+```
+
+The result is `config.server.port == 5000` and `config.server.host == "example.com"`. ENV supplies the port, the project supplies the host, and defaults fill any remaining settings.
+
+Namespaces merge recursively. Scalars and arrays are selected whole from the first source providing them; arrays are never concatenated. An explicit `false`, `nil`, or empty array is a supplied value, not absence, and must satisfy the schema's type. An invalid winning value raises an error instead of falling back to another source. Every source is checked for unknown settings and unsupported schema versions, even if its values are shadowed.
+
+## Installation
+
+Disposita 0.2.0 requires Ruby 3.2 or newer. After the release is published, use:
+
+```ruby
+gem "disposita", "~> 0.2.0"
+```
+
+Then run `bundle install`. Breaking changes from the previous release are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+## Public model
 
 ```text
-defaults < global < project < environment < runtime
+define_schema → Schema → Sources → resolve → Configuration
 ```
 
-## Typed access
+- `Disposita.define_schema` describes which settings exist.
+- `Source#read(schema)` obtains partial raw data.
+- `Schema#resolve(sources: [])` applies precedence, recursive merge, defaults, coercion and validation, and records provenance.
+- `Configuration` is the final immutable result.
+- `Schema#write(source, data)` persists explicitly to one selected source.
+
+## Namespaces, types and validation
 
 ```ruby
-config.git.default_remote # => "origin"
-config.git.transport      # => :ssh
-config.git.timeout        # => 10
-```
-
-Resolved configuration is immutable. `to_h` returns a detached copy for interoperability.
-
-## Coercion
-
-Disposita performs conservative coercion when a setting allows it (the default):
-
-```text
-"5432"  -> Integer
-"1.5"   -> Float
-"ssh"   -> Symbol / enum value
-"false" -> Boolean
-```
-
-Use `coerce: false` to require an already-typed value.
-
-```ruby
-setting :strict_port, type: Integer, coerce: false
-```
-
-## Validation
-
-A setting can add consumer-owned semantic validation:
-
-```ruby
-setting :timeout, type: Integer, default: 30 do |value|
-  value.positive?
+ServiceSchema = Disposita.define_schema(:service) do
+  namespace :git do
+    setting :transport, type: Disposita::Types.enum(:ssh, :https), default: :ssh
+    setting :mirrors, type: Disposita::Types.array(String), default: []
+  end
+  setting :enabled, type: Disposita::Types.boolean, default: true
+  setting :ratio, type: Float, default: 1.25
+  setting :mode, type: Symbol, default: :development
+  setting :timeout, type: Integer, required: true, default: 30 do |value|
+    value.positive?
+  end
 end
 ```
 
-Disposita runs the rule; the consumer defines what the rule means.
+Namespaces can nest. Each setting or namespace name must be a non-empty String or Symbol without `.`; dots separate path segments, so use a namespace to declare `server.port`. No additional naming convention is imposed. Use Ruby `String`, `Integer`, `Float`, and `Symbol`, plus `Types.boolean`, `Types.enum(...)` and `Types.array(member_type)`. Use these factories instead of instantiating their implementation classes. Disposita remains a small configuration library with no Typio or Rails dependency.
 
-## Environment variables
+Coercion follows the declared type: `"5432"` becomes integer `5432`, `"1.25"` becomes float `1.25`, `"true"`/`"false"` become booleans, and `"ssh"` becomes `:ssh` for Symbol or an appropriate enum. Strings remain strings when `type: String` is declared. Array members use their declared member type; ENV strings are not implicitly split into arrays. Sources return raw data and do not infer types.
 
-A setting may name its environment variable explicitly:
+| Setting option | Default | Meaning |
+| --- | --- | --- |
+| `type:` | Required | Ruby class or configuration type. Custom type objects may implement `valid?` and optionally `coerce`; otherwise validation uses `===`. |
+| `default:` | Absent | Final fallback, coerced and validated like source data. Explicit `nil` counts as present and must satisfy the type. |
+| `required:` | `false` | A value must exist after all sources and defaults resolve. May be satisfied by a default. |
+| `optional:` | `false` | Documents that absence is allowed. Cannot be true together with `required: true`. |
+| `env:` | `nil` | Explicit environment variable name, used only by an Environment source. |
+| `secret:` | `false` | Redact diagnostics and apply persistence policy. |
+| `description:` | `nil` | Text included in public metadata. |
+| `coerce:` | `true` | Set false to require already typed values. |
+
+Defaults are copied and deeply frozen when the setting is declared. Mutating the original arrays, hashes or strings afterward does not change the schema. Metadata returned by `describe` is also deeply frozen and cannot modify the stored default.
+
+`required: true` means the setting must have a value in the final Configuration; it does not require the consumer to supply it explicitly. For example, `required: true, default: 30` resolves to `30` without an external source. Combining `required: true` with `optional: true` remains invalid.
+
+Settings without `required: true` may be absent. Missing values are omitted from `to_h`. A validator block runs after coercion and must return a truthy value. Required absence raises `MissingSettingError`; coercion and custom validation failures raise `CoercionError` and `ValidationError`. Unknown keys raise `UnknownSettingError`, including unknown empty mappings. Typos are never silently ignored.
+
+## Environment source
 
 ```ruby
-setting :transport, type: Symbol, env: "SCM_GIT_TRANSPORT"
+AuthSchema = Disposita.define_schema(:auth) do
+  setting :token, type: String, secret: true, env: "MY_SPECIAL_TOKEN"
+  setting :timeout, type: Integer, default: 30
+end
+
+environment = Disposita::Sources::Environment.new(
+  env: { "MY_SPECIAL_TOKEN" => "example-token", "APP_TIMEOUT" => "10" },
+  prefix: "APP",
+  name: :environment
+)
+config = AuthSchema.resolve(sources: [environment])
 ```
 
-Or a source may generate names from a prefix and setting path:
+`env:` on the source defaults to `ENV` because creating that source is an explicit choice. `prefix:` derives uppercase names from the full dotted path: `server.port` becomes `APP_SERVER_PORT`. A setting's explicit name replaces the derived name; if the explicit variable is absent, the derived name is not used. Without a prefix, only explicitly named variables are read. Unrelated environment variables are ignored.
+
+## Memory source and runtime values
 
 ```ruby
-Disposita::Sources::Environment.new(prefix: "SCM")
-# git.transport -> SCM_GIT_TRANSPORT
+runtime = Disposita::Sources::Memory.new({ server: { port: 9292 } }, name: :runtime)
+environment = Disposita::Sources::Environment.new(prefix: "APP")
+project = Disposita::Sources::File.new(".app.yml", name: :project)
+global = Disposita::Sources::File.new(
+  File.join(Disposita::Paths.user_config("app"), "config.yml"), name: :global
+)
+config = AppSchema.resolve(sources: [runtime, environment, project, global])
 ```
 
-## Safe YAML
+The priority here is runtime, environment, project, global, then defaults. Memory is a read-only source for tests, embedding and programmatic values, with default name `:memory`. It normalizes mapping keys without coercing values. There is no special runtime argument on Schema.
 
-The bundled file source uses `Psych.safe_load` and disables Ruby-object deserialization and YAML aliases. Symbols are serialized as strings and coerced back according to the schema.
+## Configuration, provenance and explain
+
+```ruby
+config = AppSchema.resolve(sources: [
+  Disposita::Sources::Memory.new({ server: { port: "5000" } }, name: :runtime)
+])
+config.server.port # => 5000
+config[:server][:host] # => "localhost"
+config.source_of("server.port") # => :runtime
+config.source_of([:server, :host]) # => :default
+config.explain("server.port")
+# => { path: "server.port", value: 5000, source: :runtime }
+copy = config.to_h
+```
+
+Resolved values are recursively frozen; `to_h` returns a detached mutable copy. Resolution does not freeze caller-owned source values. `source_of` returns nil when no value was supplied. `explain` reports the selected value and source, not the full candidate chain. For an absent optional setting it reports nil value/source; for an unknown setting it raises `KeyError`. `inspect` and `explain` redact secrets; ordinary access and `to_h` return actual values.
+
+## File source and safe YAML
+
+Missing files are empty sources. Files use a codec with `load(String)` and `dump(Hash)` methods, supplied through `format:`; the bundled codec is `Disposita::Formats::YAML`.
+
+YAML loading uses Psych safe APIs with Ruby objects, arbitrary classes, Symbol tags and aliases disabled. Runtime Symbols are dumped as plain strings and recovered through schema coercion. No JSON or TOML codecs are included.
+
+YAML interprets some unquoted values as special types before schema coercion. For example, `release_date: 2026-09-09` is interpreted as a Date and rejected by the safe loader, even if the setting declares `type: String`. Quote such values to keep them as strings:
 
 ```yaml
-version: 1
-git:
-  transport: ssh
+release_date: "2026-09-09"
 ```
 
-Disposita intentionally ships YAML only in 0.1.0. The format boundary is isolated so JSON or TOML can be added without changing schema ownership or resolution semantics.
+Date is not a permitted class in Disposita 0.2.0.
 
-## Explicit writes
+## Explicit persistence
 
-Reading may combine many layers. Writing always targets one explicit writable source.
+Reading may combine many sources. Writing always targets exactly one source.
 
 ```ruby
-project = Disposita::Sources::File.new(".scm.yml", name: :project)
-
-SCMConfig.write(project, git: { transport: :https })
+project = Disposita::Sources::File.new(".app.yml", name: :project)
+AppSchema.write(project, server: { port: 9292 })
 ```
 
-Writes are validated and performed atomically through a temporary file followed by rename.
+`write` validates only the explicitly supplied partial values and adds the schema version. It replaces the target's contents with that payload. It never automatically persists ENV, runtime, defaults, other sources or a resolved configuration; there is no `config.save!`.
 
-Defaults are not written automatically: consumers persist only the overrides they choose.
+File writes create a temporary file in the destination directory, write, flush, fsync and rename it into place. Temporary files are cleaned up on failure. Files have restrictive permissions (`0600` on supported platforms). Failed replacement leaves the existing file intact. Parent directories are created only during explicit writes.
 
 ## Secrets
 
-A setting can be marked as sensitive:
+`secret: true != encryption`. It means diagnostic redaction, protection against accidental disclosure and an explicit persistence policy. Disposita is not a secret manager.
 
-```ruby
-setting :token, type: String, secret: true
-```
-
-The actual value remains available to application code:
-
-```ruby
-config.git.token
-```
-
-But diagnostics redact it:
-
-```ruby
-config.inspect
-# => #<Disposita::Configuration git=#<... token=[REDACTED]>>
-```
-
-Normal file sources reject secret persistence by default. A consumer must opt in explicitly:
+Every source may read secret values. `Source#allows_secret_persistence?` describes permission to **write** them, and defaults to false. File rejects secret writes unless explicitly opted in:
 
 ```ruby
 private_store = Disposita::Sources::File.new(
-  "~/.config/scm/private.yml",
-  name: :private,
-  allow_secrets: true
+  "~/.config/app/private.yml", name: :private, allow_secrets: true
 )
+AuthSchema.write(private_store, token: "example-token")
 ```
 
-Secret-aware behavior is not encryption. Disposita 0.1.0 deliberately does not implement cryptographic storage, key management, Vault, KMS or OS keychains.
-
-## Provenance
-
-Disposita tracks which layer supplied the winning value:
-
-```ruby
-config.source_of("git.transport")
-# => :project
-
-config.explain("git.transport")
-# => { path: "git.transport", value: :https, source: :project }
-```
-
-Secret values are redacted from `explain`.
+Secret defaults are redacted in metadata; secret values are redacted in `inspect`, `explain` and coercion errors. Direct access and exports contain real secrets, so they are not logging APIs.
 
 ## Paths
 
-User-level configuration paths follow platform conventions:
+`Paths.user_config("app")` follows Linux/XDG (`$XDG_CONFIG_HOME` or `~/.config`), macOS Application Support, and Windows APPDATA with LOCALAPPDATA fallback. The application name must be a single directory name without traversal or path separators. Optional `env:` and `host_os:` arguments allow deterministic path selection.
 
-- Linux: `$XDG_CONFIG_HOME/<app>` or `~/.config/<app>`
-- macOS: `~/Library/Application Support/<app>`
-- Windows: `%APPDATA%\<app>` (falling back to `%LOCALAPPDATA%`)
+`Paths.project(root, relative)` resolves a consumer-selected project path and rejects traversal outside the root. These helpers compute paths without creating directories. The consumer chooses the layout; no `.disposita` or other project directory is imposed.
 
-Project paths remain consumer-owned:
+## Introspection and custom Sources
 
-```ruby
-Disposita::Paths.project(Dir.pwd, ".rubcraft/scm.yml")
-```
-
-Disposita never imposes `.rubcraft`, `.disposita`, or another project directory.
-
-## Schema introspection
+`Schema#describe(path)` returns a deeply frozen metadata hash, or nil for an unknown path. `Schema#each_setting` yields the same hashes in declaration order and returns an Enumerator without a block.
 
 ```ruby
-SCMConfig.describe("git.transport")
-# => {
-#   path: "git.transport",
-#   type: "enum(:ssh, :https)",
-#   default: :ssh,
-#   has_default: true,
-#   required: false,
-#   secret: false,
-#   env: "SCM_GIT_TRANSPORT",
-#   description: nil
-# }
+AppSchema.describe("server.port")
+# => { path: "server.port", type: "Integer", default: 3000,
+#      has_default: true, required: false, secret: false, env: nil, description: nil }
+AppSchema.each_setting.map { |metadata| metadata[:path] }
+# => ["server.host", "server.port"]
 ```
 
-This metadata is intended to support future CLI help, documentation and UI tooling without coupling Disposita to a particular CLI framework. Secret defaults appear as `[REDACTED]`, while `has_default` still indicates whether a default exists. Direct configuration access and `to_h` return actual values.
+Secret defaults appear as `[REDACTED]`. Metadata never exposes internal definition or type adapter objects.
 
-Prefer `describe` for diagnostic tooling. The lower-level `setting` and `settings` methods expose internal definition objects, including actual defaults; they are not safe logging representations.
+A custom Source can work entirely through public metadata:
+
+```ruby
+class DatabaseSource < Disposita::Source
+  def initialize(rows, name: :database)
+    super(name: name)
+    @rows = rows # An application-owned mapping of dotted paths to raw values.
+  end
+
+  def read(schema)
+    schema.each_setting.each_with_object({}) do |metadata, data|
+      path = metadata.fetch(:path)
+      next unless @rows.key?(path)
+
+      segments = path.split(".").map(&:to_sym)
+      parent = segments[0...-1].reduce(data) { |node, key| node[key] ||= {} }
+      parent[segments.last] = @rows.fetch(path)
+    end
+  end
+end
+
+config = AppSchema.resolve(sources: [DatabaseSource.new({ "server.port" => "6000" })])
+config.server.port # => 6000
+```
+
+Custom Sources implement `read(schema)` and inherit `name`, read-only `writable?`, and denied `allows_secret_persistence?`. Writable adapters implement `writable?`, `write(schema, data)` and enforce their persistence policy. Schema handles validation; sources own storage mechanics.
 
 ## Schema versions
 
-Each schema has a version and file sources may persist it. Disposita rejects configuration produced by a newer schema version. Automatic migrations are intentionally deferred beyond 0.1.0 so the migration contract can be designed without freezing a premature API.
+`Disposita.define_schema(:app, version: 1)` uses a consumer-owned version independent of `Disposita::VERSION` (`0.2.0`). Explicit writes include `version:`. Resolution rejects persisted versions newer than the schema and malformed version values. Complex migrations are not included.
 
-## Ownership model
+## Development and API documentation
 
-Disposita owns:
-
-- schema infrastructure
-- type checking and configuration-oriented coercion
-- loading and persistence primitives
-- layering and provenance
-- conventional user paths
-- validation mechanics
-- secret-aware diagnostics
-
-Consumers own:
-
-- the schema itself
-- project file locations
-- layer policy and precedence
-- what each setting means
-- semantic validation rules
-- whether and where secrets may be persisted
-
-A library such as SCM can remain configuration-agnostic while `SCM CLI`, Rubcraft Toolkit, or another application defines its own Disposita schema around SCM.
-
-## Non-goals for 0.1.0
-
-Disposita does not aim to be a general-purpose type system, secret manager, encryption framework, Rails settings singleton, command-line parser or business-rule engine.
-
-## Development
-
-```bash
+```sh
 bundle install
-bundle exec rspec
-bundle exec rubocop
-bundle exec rake
 COVERAGE=true bundle exec rspec
+bundle exec rubocop
 bundle exec rake yard
+bundle exec rake build
 ```
 
-The test suite is organized by public behavior and subsystem, with integration-style schema specs separated from source/format/path specs.
+`bundle exec rake` runs RuboCop, specs and YARD. Coverage thresholds remain line >=95% and branch >=90%. CI tests Ruby 3.2, 3.3, 3.4 and 4.0. YARD uses README as the homepage, writes documentation to `doc/`, and treats warnings as failures.
+
+Public contracts are `Disposita.define_schema`, Schema, Configuration, Source and its three built-in implementations, the Types factories, Paths and the YAML codec. `Internal::*`, namespace implementation nodes, constructors for resolved objects, and dot-access machinery are implementation details excluded from public documentation.
 
 ## License
 
 MIT.
-
-## API documentation
-
-Disposita's public API is documented with YARD comments that explain not only
-method signatures, but also ownership, precedence, persistence safety and common
-usage patterns. Generate the local documentation with:
-
-```sh
-bundle exec rake yard
-```
-
-The generated site is written to `doc/`. CI generates it with warnings treated as failures. Internal implementation objects are
-marked with `@api private`; applications should build against the documented
-public objects such as `Disposita`, `Disposita::Schema`,
-`Disposita::Configuration`, `Disposita::Source`, `Disposita::Sources::*`,
-`Disposita::Types` and `Disposita::Paths`.

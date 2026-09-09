@@ -13,11 +13,14 @@ module Disposita
     # Schema so every source follows the same validation rules.
     #
     # @example
+    #   schema = Disposita.define_schema(:app) do
+    #     namespace(:server) { setting :port, type: Integer, default: 3000 }
+    #   end
     #   source = Disposita::Sources::Environment.new(
     #     env: { "APP_SERVER_PORT" => "9292" },
     #     prefix: "APP"
     #   )
-    #   schema.resolve([source]).server.port # => 9292
+    #   schema.resolve(sources: [source]).server.port # => 9292
     class Environment < Source
       # @param env [Hash] environment-like mapping; defaults to the process ENV.
       #   Pass a Hash to isolate resolution from the process environment.
@@ -35,11 +38,11 @@ module Disposita
       #   to determine variable names.
       # @return [Hash] nested raw configuration values.
       def read(schema)
-        schema.settings.each_with_object({}) do |setting, data|
-          env_name = setting.env || generated_name(setting)
+        schema.each_setting.with_object({}) do |setting, data|
+          env_name = setting[:env] || generated_name(setting)
           next unless env_name && @env.key?(env_name)
 
-          Internal::HashTools.set(data, setting.path, @env.fetch(env_name))
+          Internal::HashTools.set(data, setting[:path].split(".").map(&:to_sym), @env.fetch(env_name))
         end
       end
 
@@ -48,7 +51,7 @@ module Disposita
       def generated_name(setting)
         return unless @prefix
 
-        ([@prefix] + setting.path).join("_").upcase
+        ([@prefix] + setting[:path].split(".")).join("_").upcase
       end
     end
   end

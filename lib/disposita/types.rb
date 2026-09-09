@@ -12,7 +12,7 @@ module Disposita
   # for environment variables, where every input starts as a String.
   #
   # @example
-  #   Disposita.define(:app) do
+  #   Disposita.define_schema(:app) do
   #     setting :enabled, type: Disposita::Types.boolean, default: true
   #     setting :transport, type: Disposita::Types.enum(:ssh, :https)
   #     setting :hosts, type: Disposita::Types.array(String), default: []
@@ -23,6 +23,7 @@ module Disposita
     # Resolved values are strictly +true+ or +false+. Coercion accepts common
     # ENV-friendly strings such as +"true"+, +"yes"+, +"1"+, +"false"+,
     # +"no"+ and +"0"+ case-insensitively.
+    # @api private
     class Boolean
       # @param value [Object] candidate resolved value.
       # @return [Boolean] whether +value+ is exactly +true+ or +false+.
@@ -50,6 +51,7 @@ module Disposita
     # String inputs may be coerced to Symbol members, which makes enums useful
     # for values arriving from ENV or YAML while preserving symbolic runtime
     # APIs.
+    # @api private
     class Enum
       # @return [Array<Object>] allowed values.
       attr_reader :values
@@ -92,6 +94,7 @@ module Disposita
     #
     # Member types use the same adapter rules as top-level settings, so Ruby
     # classes and other Disposita type helpers can be nested.
+    # @api private
     class ArrayOf
       # @return [Object] declared member type.
       attr_reader :member_type
@@ -128,13 +131,13 @@ module Disposita
 
     # Returns the built-in boolean type object.
     #
-    # @return [Class<Disposita::Types::Boolean>]
+    # @return [Object] configuration type for use with +type:+.
     def boolean = Boolean
 
     # Builds a finite enum type.
     #
     # @param values [Array<Object>] accepted runtime values.
-    # @return [Disposita::Types::Enum]
+    # @return [Object] configuration type for use with +type:+.
     # @raise [ArgumentError] when no values are supplied.
     # @example
     #   type = Disposita::Types.enum(:ssh, :https)
@@ -144,7 +147,7 @@ module Disposita
     # Builds a homogeneous array type.
     #
     # @param member_type [Object] type required for every member.
-    # @return [Disposita::Types::ArrayOf]
+    # @return [Object] configuration type for use with +type:+.
     # @example
     #   Disposita::Types.array(String)
     def array(member_type) = ArrayOf.new(member_type)

@@ -26,7 +26,7 @@ module Disposita
     # @param host_os [String] operating-system identifier, usually Ruby's
     #   +RbConfig::CONFIG["host_os"]+.
     # @return [String] absolute or platform-native user configuration directory.
-    # @raise [Disposita::PathError] if the application name is empty or no base
+    # @raise [Disposita::PathError] if the application name is empty, contains path components, or no base
     #   user configuration directory can be determined.
     # @example
     #   Disposita::Paths.user_config("scm")
@@ -35,7 +35,9 @@ module Disposita
     #   # Windows: %APPDATA%\\scm
     def user_config(application, env: ENV, host_os: RbConfig::CONFIG["host_os"])
       name = application.to_s
-      raise PathError, "application name cannot be empty" if name.empty?
+      if name.empty? || %w[. ..].include?(name) || name.match?(%r{[/\\:\x00]})
+        raise PathError, "application name must be a single directory name"
+      end
 
       base = config_home(env, host_os)
 
@@ -81,7 +83,7 @@ module Disposita
     def project(root, relative)
       root = ::File.expand_path(root)
       candidate = ::File.expand_path(relative, root)
-      unless candidate == root || candidate.start_with?("#{root}#{::File::SEPARATOR}")
+      unless candidate == root || candidate.start_with?(::File.join(root, ""))
         raise PathError, "project configuration path escapes project root"
       end
 
@@ -90,10 +92,13 @@ module Disposita
 
     # @param host_os [String] Ruby host OS identifier.
     # @return [Boolean] whether the identifier represents Windows.
+    # @api private
     def windows?(host_os) = host_os.match?(/mswin|mingw|cygwin/i)
 
     # @param host_os [String] Ruby host OS identifier.
     # @return [Boolean] whether the identifier represents macOS.
+    # @api private
     def macos?(host_os) = host_os.match?(/darwin/i)
+    private_class_method :windows?, :macos?
   end
 end
