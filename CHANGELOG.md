@@ -4,6 +4,15 @@ All notable changes to Disposita will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows Semantic Versioning.
 
+## [0.2.1] - 2026-09-09
+
+### Fixed
+
+- Include `.yardopts` and the custom YARD template in the gem so documentation generated from the package preserves public API filtering.
+- Centralize SimpleCov configuration in `.simplecov`, preserving line >=95% and branch >=90% thresholds.
+- Add the public-gem metadata `homepage_uri` and `allowed_push_host` required by Rubcraft.
+- Run dependency audit and gem build in CI, and verify documentation generated from the unpacked gem in CI and release verification.
+
 ## [0.2.0] - 2026-09-09
 
 ### Breaking

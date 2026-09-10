@@ -37,6 +37,12 @@ jobs:
         env:
           COVERAGE: "true"
 
+      - name: Bundler Audit
+        run: bundle exec bundler-audit check --update
+
+      - name: Build gem and verify packaged documentation
+        run: bundle exec rake build yard:package
+
   test:
     runs-on: ubuntu-latest
     strategy:

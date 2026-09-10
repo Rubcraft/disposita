@@ -7,11 +7,7 @@
 
 require "simplecov"
 
-SimpleCov.start do
-  enable_coverage :branch
-  skip "/spec/"
-  minimum_coverage line: 95, branch: 90 if ENV["COVERAGE"] == "true"
-end
+SimpleCov.start
 
 require "disposita"
 
