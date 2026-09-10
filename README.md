@@ -57,10 +57,10 @@ Namespaces merge recursively. Scalars and arrays are selected whole from the fir
 
 ## Installation
 
-Disposita 0.2.0 requires Ruby 3.2 or newer. After the release is published, use:
+Disposita 0.2.1 requires Ruby 3.2 or newer. After the release is published, use:
 
 ```ruby
-gem "disposita", "~> 0.2.0"
+gem "disposita", "~> 0.2.1"
 ```
 
 Then run `bundle install`. Breaking changes from the previous release are recorded in [CHANGELOG.md](CHANGELOG.md).
@@ -176,7 +176,7 @@ YAML interprets some unquoted values as special types before schema coercion. Fo
 release_date: "2026-09-09"
 ```
 
-Date is not a permitted class in Disposita 0.2.0.
+Date is not a permitted class in Disposita 0.2.1.
 
 ## Explicit persistence
 
@@ -255,7 +255,7 @@ Custom Sources implement `read(schema)` and inherit `name`, read-only `writable?
 
 ## Schema versions
 
-`Disposita.define_schema(:app, version: 1)` uses a consumer-owned version independent of `Disposita::VERSION` (`0.2.0`). Explicit writes include `version:`. Resolution rejects persisted versions newer than the schema and malformed version values. Complex migrations are not included.
+`Disposita.define_schema(:app, version: 1)` uses a consumer-owned version independent of `Disposita::VERSION` (`0.2.1`). Explicit writes include `version:`. Resolution rejects persisted versions newer than the schema and malformed version values. Complex migrations are not included.
 
 ## Development and API documentation
 
@@ -264,10 +264,10 @@ bundle install
 COVERAGE=true bundle exec rspec
 bundle exec rubocop
 bundle exec rake yard
-bundle exec rake build
+bundle exec rake build yard:package
 ```
 
-`bundle exec rake` runs RuboCop, specs and YARD. Coverage thresholds remain line >=95% and branch >=90%. CI tests Ruby 3.2, 3.3, 3.4 and 4.0. YARD uses README as the homepage, writes documentation to `doc/`, and treats warnings as failures.
+`bundle exec rake` runs RuboCop, specs, Bundler Audit, YARD and packaged-documentation verification. `bundle exec rake yard:package` builds and unpacks the gem into a temporary directory, generates YARD using its bundled configuration and template, and rejects internal API leakage. CI and release verification run this check before publication. Coverage thresholds are configured in `.simplecov`: line >=95% and branch >=90%. CI tests Ruby 3.2, 3.3, 3.4 and 4.0. YARD uses README as the homepage, writes documentation to `doc/`, and treats warnings as failures.
 
 Public contracts are `Disposita.define_schema`, Schema, Configuration, Source and its three built-in implementations, the Types factories, Paths and the YAML codec. `Internal::*`, namespace implementation nodes, constructors for resolved objects, and dot-access machinery are implementation details excluded from public documentation.
 

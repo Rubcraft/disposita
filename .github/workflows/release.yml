@@ -48,8 +48,8 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
-      - name: Build gem
-        run: bundle exec rake build
+      - name: Build gem and verify packaged documentation
+        run: bundle exec rake build yard:package
 
   publish:
     needs: verify
